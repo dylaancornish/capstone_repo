@@ -1,1 +1,1 @@
-# capstone
+# Maxim Integrated Capstone
