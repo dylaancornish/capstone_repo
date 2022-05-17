@@ -6,7 +6,9 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import torch.optim as optim
 from sklearn import preprocessing
+from sklearn.utils import class_weight
 import os
+import sys
 
 
 class Net(nn.Module):
@@ -130,6 +132,10 @@ def scale_data3d(train, test, val=None):
 ## uncomment next line to scaler data, it seems to make performance/convergence much worse in this case
 # X_train, X_test, X_val = scale_data3d(X_train, X_test, X_val) 
 
+class_weights = class_weight.compute_class_weight('balanced', classes = np.unique(y_train), y = y_train)
+class_weights = torch.from_numpy(class_weights)
+class_weights = class_weights.to(device).float()
+
 #convert numpy arrays to tensors, encode labels
 X_train = torch.from_numpy(X_train)
 le = preprocessing.LabelEncoder()
@@ -143,11 +149,6 @@ y_test = torch.from_numpy(y_test)
 X_val = torch.from_numpy(X_val)
 y_val = le.transform(y_val)
 y_val = torch.from_numpy(y_val)
-
-values, counts = np.unique(y_train, return_counts=True)
-class_weights = counts / sum(counts)
-class_weights = torch.from_numpy(class_weights)
-class_weights = class_weights.to(device).float()
 
 #cross entropy loss w SGD optimizer
 criterion = nn.CrossEntropyLoss(weight = class_weights)
