@@ -131,7 +131,6 @@ def scale_data3d(train, test, val=None):
 # X_train, X_test, X_val = scale_data3d(X_train, X_test, X_val) 
 
 #convert numpy arrays to tensors, encode labels
-print(np.unique(y_train, return_counts=True))
 X_train = torch.from_numpy(X_train)
 le = preprocessing.LabelEncoder()
 y_train = le.fit_transform(y_train)
@@ -149,8 +148,6 @@ values, counts = np.unique(y_train, return_counts=True)
 class_weights = counts / sum(counts)
 class_weights = torch.from_numpy(class_weights)
 class_weights = class_weights.to(device).float()
-print(counts)
-print(class_weights)
 
 #cross entropy loss w SGD optimizer
 criterion = nn.CrossEntropyLoss(weight = class_weights)
