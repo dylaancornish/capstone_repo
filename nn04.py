@@ -40,8 +40,7 @@ class Net(nn.Module):
         #dropout and fully connected layer
         self.dropout_fc = nn.Dropout(0.4)
         self.fc1 = nn.Linear(1280, 21)
-
-        # self.fc2 = nn.Linear(80, 21)
+        
 
     #forward propogation
     def forward(self, x):
@@ -50,13 +49,9 @@ class Net(nn.Module):
         x = self.dropout_conv(x)
         x = self.pool(x)
 
-        # print(x.shape)
-
         #2nd conv block
         x = F.relu(self.conv2(x))
         x = self.dropout_conv(x)
-
-        # print(x.shape)
 
         #3rd conv block
         x = F.relu(self.conv3(x))
@@ -79,12 +74,10 @@ class Net(nn.Module):
         x = F.relu(self.conv7(x))
         x = self.dropout_conv(x)
 
-        # print(x.shape)
         #dropout and fully connected layer
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = self.dropout_fc(x)
         x = self.fc1(x)
-        # x = self.fc2(x)
         return x
 
 
@@ -102,10 +95,6 @@ if torch.cuda.device_count() > 1:
 	net = nn.DataParallel(net)
 net.to(device)
 
-#cross entropy loss w SGD optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=0.001)
-
 #load data
 X_train = np.load('X_train.npy')
 y_train = np.load('y_train.npy')
@@ -117,7 +106,7 @@ X_val = np.load('X_val.npy')
 y_val = np.load('y_val.npy')
 
 def scale_data3d(train, test, val=None):
-    scaler = preprocessing.MinMaxScaler()
+    scaler = preprocessing.StandardScaler()
     train_dim0, train_dim1, train_dim2 = train.shape[0], train.shape[1], train.shape[2]
     test_dim0, test_dim1, test_dim2 = test.shape[0], test.shape[1], test.shape[2]
     
@@ -142,6 +131,7 @@ def scale_data3d(train, test, val=None):
 # X_train, X_test, X_val = scale_data3d(X_train, X_test, X_val) 
 
 #convert numpy arrays to tensors, encode labels
+print(np.unique(y_train, return_counts=True))
 X_train = torch.from_numpy(X_train)
 le = preprocessing.LabelEncoder()
 y_train = le.fit_transform(y_train)
@@ -154,6 +144,17 @@ y_test = torch.from_numpy(y_test)
 X_val = torch.from_numpy(X_val)
 y_val = le.transform(y_val)
 y_val = torch.from_numpy(y_val)
+
+values, counts = np.unique(y_train, return_counts=True)
+class_weights = counts / sum(counts)
+class_weights = torch.from_numpy(class_weights)
+class_weights = class_weights.to(device).float()
+print(counts)
+print(class_weights)
+
+#cross entropy loss w SGD optimizer
+criterion = nn.CrossEntropyLoss(weight = class_weights)
+optimizer = optim.Adam(net.parameters(), lr=3e-4)
 
 #create dataloaders for all 3 datasets
 train_set = TensorDataset(X_train, y_train)
