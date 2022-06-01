@@ -12,20 +12,22 @@ import sys
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from models import CNNQuantized
 
 n_mfcc = 20
 mfcc_length = 126
+sr = 16000
+batch_size = 32
 
 class Net(nn.Module):
 	def __init__(self):
 		super().__init__()
-		self.fc1 = nn.Linear(16000, 100)
+		self.fc1 = nn.Linear(16000, 2000)
 		self.dropout = nn.Dropout(0.2)
 
-		self.fc2 = nn.Linear(100, 100)
+		self.fc2 = nn.Linear(2000, 1000)
 
-		self.fc3 = nn.Linear(100, 200)
+		self.fc3 = nn.Linear(1000, 200)
 
 		self.dropout_final = nn.Dropout(0.4)
 		self.fc4 = nn.Linear(200, n_mfcc * mfcc_length)
@@ -39,11 +41,16 @@ class Net(nn.Module):
 		x = F.relu(self.fc3(x))
 		x = self.dropout_final(x)
 		x = F.relu(self.fc4(x))
-		x = torch.reshape(x, (n_mfcc, mfcc_length))
+		# print(x.shape)
+		# print(len(x) / (n_mfcc * mfcc_length))
+		# print(x.shape[1] / (n_mfcc * mfcc_length))
+		x = torch.reshape(x, (x.shape[1], n_mfcc, mfcc_length))
+		# x = torch.reshape(x, ((len(x) / (n_mfcc * mfcc_length), n_mfcc, mfcc_length)))
 		return x
 
 
 net = Net()
+conv_net = CNNQuantized()
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -56,9 +63,20 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if torch.cuda.device_count() > 1:
 	net = nn.DataParallel(net)
 net.to(device)
+conv_net.to(device)
 
 #load data
+X_train = np.load('train_audio.npy')
+y_train = np.load('train_mfcc.npy')
 
+
+X_test = np.load('test_audio.npy')
+y_test = np.load('test_mfcc.npy')
+test_label = np.load('test_label.npy')
+
+X_val = np.load('val_audio.npy')
+y_val = np.load('val_mfcc.npy')
+val_label = np.load('val_label.npy')
 
 def scale_data3d(train, test, val=None):
     scaler = preprocessing.StandardScaler()
@@ -93,7 +111,8 @@ def scale_data3d(train, test, val=None):
 #convert numpy arrays to tensors, encode labels
 X_train = torch.from_numpy(X_train)
 le = preprocessing.LabelEncoder()
-y_train = le.fit_transform(y_train)
+le.classes_ = np.load('encoder.npy')
+# y_train = le.fit_transform(y_train)
 y_train = torch.from_numpy(y_train)
 
 # print(np.unique(y_train))
@@ -102,17 +121,23 @@ y_train = torch.from_numpy(y_train)
 # sys.exit()
 
 X_test = torch.from_numpy(X_test)
-y_test = le.transform(y_test)
+test_label = le.transform(test_label)
 y_test = torch.from_numpy(y_test)
 
 X_val = torch.from_numpy(X_val)
-y_val = le.transform(y_val)
+val_label = le.transform(val_label)
+val_label = torch.from_numpy(val_label)
 y_val = torch.from_numpy(y_val)
 
-print(X_train.shape)
+
+def matrix_similarity_loss(output, target):
+	loss = abs(torch.cdist(output, target, p=2.0))
+	return loss
 
 #cross entropy loss w SGD optimizer
-criterion = nn.CrossEntropyLoss()#weight = class_weights)
+# criterion = nn.MSELoss()#weight = class_weights)
+# criterion = matrix_similarity_loss()
+criterion = nn.MSELoss()
 optimizer = optim.Adam(net.parameters(), lr=3e-4)
 
 #create dataloaders for all 3 datasets
@@ -120,12 +145,24 @@ train_set = TensorDataset(X_train, y_train)
 train_dataloader = DataLoader(train_set, batch_size = 32, shuffle=True)
 
 val_set = TensorDataset(X_val, y_val)
-val_dataloader = DataLoader(val_set, batch_size = 32)
+val_dataloader = DataLoader(val_set, batch_size = 32, shuffle=True)
 
 test_set = TensorDataset(X_test, y_test)
 test_dataloader = DataLoader(test_set, batch_size = len(y_train))
 
 y_pred = []
+
+checkpoint = torch.load('nn05_quantized.pt')
+try:
+	conv_net.load_state_dict(checkpoint)
+except RuntimeError:
+	from collections import OrderedDict
+	new_state_dict = OrderedDict()
+	for k, v in checkpoint.items():
+		name = k[7:]
+		new_state_dict[name] = v
+	conv_net.load_state_dict(new_state_dict)
+conv_net.eval()
 
 for epoch in range(100):
 	#set loss for each epoch to 0
@@ -137,7 +174,7 @@ for epoch in range(100):
 		inputs, labels = data
 
 		#labels need to be LongTensor type for some reason
-		labels = labels.type(torch.LongTensor)
+		labels = labels.type(torch.FloatTensor)
 
 		#inputs need to be floats
 		inputs = inputs.float()
@@ -145,8 +182,8 @@ for epoch in range(100):
 		#reshape inputs as (channels, batch size, 20, 126)
 		#(20, 126) at end should be constant due to our preprocessing of the
 		#MFCCs
-		inputs = torch.reshape(inputs, (1, inputs.shape[0], 20, 126))
-		inputs = torch.permute(inputs, (1, 0, 2, 3))
+		inputs = torch.reshape(inputs, (1, inputs.shape[0], 16000))
+		# inputs = torch.permute(inputs, (1, 0))
 
 		#send data to gpus
 		inputs = inputs.to(device)
@@ -158,6 +195,7 @@ for epoch in range(100):
 		#create predictions, calculate loss, backward propogation, then
 		#update weights of model
 		outputs = net(inputs)
+		# loss = matrix_similarity_loss(outputs, labels)
 		loss = criterion(outputs, labels)
 		loss.backward()
 		optimizer.step()
@@ -165,17 +203,74 @@ for epoch in range(100):
 		#add loss
 		running_loss += loss.item()
 
+		# total = 0
+		# outputs = torch.reshape(outputs, (1, outputs.shape[0], outputs.shape[1], outputs.shape[2]))
+		# final_outputs = conv_net(outputs)
+
+		# #calculate class with highest probability
+		# _, predicted = torch.max(final_outputs.data, 1)
+		# y_pred = predicted
+		# # y_pred.extend(predicted)
+
+		# #update total and correct counts
+		# total += labels.size(0)
+		# correct += (predicted == labels).sum().item()
+
+		# print(f'Accuracy of the network on the {total} validation images: {100 * correct // total} %')
+		# print(f'Total count: {total}, correct: {correct}')
+
 		#print update every 32 batches
 		if i % 32 == 31:
 			print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 32:.3f}')
 			running_loss = 0.0
+
+	running_vloss = 0.0
+	total = 0
+	correct = 0
+	for i, vdata in enumerate(val_dataloader):
+		# print(i*32 + 31)
+		vinputs, vlabels = vdata
+		vinputs = vinputs.float()
+		vlabels = vlabels.type(torch.FloatTensor)
+
+		vinputs = vinputs.to(device)
+		vlabels = vlabels.to(device)
+		vinputs = torch.reshape(vinputs, (1, vinputs.shape[0], 16000))
+
+		voutputs = net(vinputs)
+		vloss = criterion(voutputs, vlabels)
+		running_vloss += vloss
+
+		voutputs = torch.reshape(voutputs, (1, voutputs.shape[0], voutputs.shape[1], voutputs.shape[2]))
+		voutputs = torch.permute(voutputs, (1, 0, 2, 3))
+		# print(voutputs.shape)
+		voutputs_final = conv_net(voutputs)
+		#calculate class with highest probability
+		_, y_pred = torch.max(voutputs_final.data, 1)
+		val_len = len(y_pred)
+		vwords = val_label[i*32: i*32 + val_len]
+		vwords = vwords.to(device)
+
+		# print(y_pred)
+		# print(vwords)
+		# y_pred.extend(predicted)
+
+		#update total and correct counts
+		total += vlabels.size(0)
+		correct += (y_pred == vwords).sum().item()
+
+	print(f'Accuracy of the network on the {total} validation images: {100 * correct // total} %')
+	print(f'Total count: {total}, correct: {correct}')
+
+	avg_vloss = running_vloss / (i + 1)
+	print('Validation loss {}'.format(avg_vloss))
 
 print('Finished training')
 
 ######Testing#######
 correct = 0
 total = 0 
-
+test_loss = 0.0
 #use no_grad as we are testing
 with torch.no_grad():
 
@@ -185,14 +280,14 @@ with torch.no_grad():
 		inputs, labels = data 
 
 		#convert labels to long tensors
-		labels = labels.type(torch.LongTensor)
+		labels = labels.type(torch.FloatTensor)
 
 		#convert inputs to float
 		inputs = inputs.float()
 		
-		#reshape inputs as (channels, batch size, 20, 32)
-		inputs = torch.reshape(inputs, (1, inputs.shape[0], 20, 126))
-		inputs = torch.permute(inputs, (1, 0, 2, 3))
+		#reshape inputs as (channels, batch size, 16000)
+		inputs = torch.reshape(inputs, (1, inputs.shape[0], 16000))
+		# inputs = torch.permute(inputs, (1, 0, 2, 3))
 
 		#send data to gpus
 		inputs = inputs.to(device)
@@ -200,28 +295,30 @@ with torch.no_grad():
 
 		#predict outputs
 		outputs = net(inputs)
-
+		# print(outputs.shape)
 		#calculate class with highest probability
-		_, predicted = torch.max(outputs.data, 1)
-		y_pred = predicted
+		# _, predicted = torch.max(outputs.data, 1)
+		# y_pred = predicted
 		# y_pred.extend(predicted)
 
 		#update total and correct counts
 		total += labels.size(0)
-		correct += (predicted == labels).sum().item()
+		loss = criterion(outputs, labels)
+		test_loss += loss.item()
+		# correct += (predicted == labels).sum().item()
 
-print(f'Accuracy of the network on the {total} test images: {100 * correct // total} %')
+print(f'MSE of the network on the {total} test images: {test_loss}')
 print(f'Total count: {total}, correct: {correct}')
-y_test = y_test.cpu()
-y_pred = np.array(y_pred.cpu())
+# y_test = y_test.cpu()
+# y_pred = np.array(y_pred.cpu())
 
-cf = confusion_matrix(y_test, y_pred)
-print(cf)
+# cf = confusion_matrix(y_test, y_pred)
+# print(cf)
 
-plt.figure(figsize=(10,8), dpi=120)
-sns.heatmap(cf, cmap='coolwarm', annot=True, fmt='g')
-plt.savefig('no_cw_heatmap.png')
+# plt.figure(figsize=(10,8), dpi=120)
+# sns.heatmap(cf, cmap='coolwarm', annot=True, fmt='g')
+# plt.savefig('no_cw_heatmap.png')
 
 PATH = os.getcwd()
-file_name = 'nn04_model.pt'
-torch.save(net.state_dict(), os.path.join(PATH, file_name))
+file_name = 'mfcc_estimation.pt'
+# torch.save(net.state_dict(), os.path.join(PATH, file_name))
