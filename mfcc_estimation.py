@@ -82,8 +82,8 @@ def reshape_data(data):
 	return new_data
 
 def flatten_data(data):
-		flat_data = (data.reshape(data.shape[0] * data.shape[2], data.shape[1]))
-		return flat_data
+	flat_data = (data.reshape(data.shape[0] * data.shape[2], data.shape[1]))
+	return flat_data
 
 X_train = flatten_data(reshape_data(X_train))
 X_test = flatten_data(reshape_data(X_test))
