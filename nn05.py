@@ -104,6 +104,7 @@ net.to(device)
 #load data
 X_train = np.load('X_train2.npy')
 y_train = np.load('y_train2.npy')
+print(X_train.shape)
 
 X_test = np.load('X_test2.npy')
 y_test = np.load('y_test2.npy')
@@ -269,10 +270,10 @@ y_pred = np.array(y_pred.cpu())
 cf = confusion_matrix(y_test, y_pred)
 print(cf)
 
-plt.figure(figsize=(10,8), dpi=120)
-sns.heatmap(cf, cmap='coolwarm', annot=True, fmt='g')
-plt.savefig('no_cw_heatmap.png')
+# plt.figure(figsize=(10,8), dpi=120)
+# sns.heatmap(cf, cmap='coolwarm', annot=True, fmt='g')
+# plt.savefig('no_cw_heatmap.png')
 
 PATH = os.getcwd()
-file_name = 'nn04_model.pt'
+file_name = 'nn05.pt'
 torch.save(net.state_dict(), os.path.join(PATH, file_name))
